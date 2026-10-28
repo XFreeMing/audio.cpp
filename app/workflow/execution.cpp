@@ -50,7 +50,8 @@ AppBatchResult run_offline_batch(
     engine::runtime::IOfflineVoiceTaskSession & offline,
     const AppBatchRequest & batch,
     AudioMergeMode audio_merge_mode,
-    const std::function<void(size_t, const AppRequestResult &)> & on_result) {
+    const std::function<bool(size_t, const AppRequestResult &)> & on_result,
+    const std::function<void(const AppRequestTiming &)> & on_timing) {
     if (batch.requests.empty()) {
         throw std::runtime_error("offline batch requires at least one request");
     }
@@ -61,21 +62,63 @@ AppBatchResult run_offline_batch(
     const auto session_start = Clock::now();
 
     const auto prepare_start = Clock::now();
-    session.prepare(engine::runtime::build_preparation_request(batch.requests.front().request));
+    try {
+        session.prepare(engine::runtime::build_preparation_request(batch.requests.front().request));
+    } catch (...) {
+        if (on_timing) {
+            AppRequestTiming timing;
+            timing.id = batch.requests.front().id;
+            timing.prepare_ms = to_ms(Clock::now() - prepare_start);
+            try { on_timing(timing); } catch (...) { /* preserve the preparation error */ }
+        }
+        throw;
+    }
     AppBatchResult out;
     out.prepare_ms = to_ms(Clock::now() - prepare_start);
     out.results.reserve(batch.requests.size());
     for (const auto & item : batch.requests) {
+        AppRequestTiming timing;
+        timing.id = item.id;
+        timing.index = out.results.size();
+        timing.prepare_ms = out.prepare_ms;
+        timing.prepare_completed = true;
         const auto run_start = Clock::now();
-        auto result = offline.run(item.request);
+        engine::runtime::TaskResult result;
+        try {
+            result = offline.run(item.request);
+        } catch (...) {
+            if (on_timing) {
+                try { on_timing(timing); } catch (...) { /* preserve the execution error */ }
+            }
+            throw;
+        }
         const double wall_ms = to_ms(Clock::now() - run_start);
+        timing.run_ms = wall_ms;
+        timing.run_completed = true;
         out.results.push_back(AppRequestResult{
             item.id,
             std::move(result),
             wall_ms,
         });
         if (on_result) {
-            on_result(out.results.size() - 1, out.results.back());
+            timing.callback_attempted = true;
+            const auto callback_start = Clock::now();
+            try {
+                timing.wav_written = on_result(out.results.size() - 1, out.results.back());
+                timing.callback_completed = true;
+            } catch (...) {
+                timing.callback_ms = to_ms(Clock::now() - callback_start);
+                timing.full_ms = to_ms(Clock::now() - run_start);
+                if (on_timing) {
+                    try { on_timing(timing); } catch (...) { /* preserve the output error */ }
+                }
+                throw;
+            }
+            timing.callback_ms = to_ms(Clock::now() - callback_start);
+            timing.full_ms = to_ms(Clock::now() - run_start);
+        }
+        if (on_timing) {
+            on_timing(timing);
         }
     }
     out.session_wall_ms = to_ms(Clock::now() - session_start);

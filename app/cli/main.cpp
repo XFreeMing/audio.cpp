@@ -1001,7 +1001,24 @@ int audiocpp_cli_main(int argc, char ** argv) {
                                           (text_out->stem().string() + "_" + request_id + text_out->extension().string());
                         write_text_output(item.result, path, "text_out[" + request_id + "]");
                     }
-                });
+                    if (!metrics_requested || !outputs.output_dir.has_value() ||
+                        !item.result.audio_output.has_value() || item.result.artifact_output.has_value()) {
+                        return false;
+                    }
+                    const auto & audio = *item.result.audio_output;
+                    if (audio.sample_rate <= 0 || audio.channels <= 0 || audio.samples.empty() ||
+                        audio.samples.size() % static_cast<size_t>(audio.channels) != 0) {
+                        return false;
+                    }
+                    const auto path = *outputs.output_dir / (minitts::app::safe_output_name(item.id) + ".wav");
+                    std::error_code error;
+                    const bool regular = std::filesystem::is_regular_file(path, error);
+                    if (error || !regular) return false;
+                    const auto bytes = std::filesystem::file_size(path, error);
+                    return !error && bytes > 44;
+                },
+                metrics_requested ? std::function<void(const minitts::app::AppRequestTiming &)>(
+                    minitts::app::emit_batch_item_timing) : std::function<void(const minitts::app::AppRequestTiming &)>{});
             minitts::app::emit_batch_summary(batch_result, outputs);
             return 0;
         }

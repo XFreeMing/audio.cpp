@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <locale>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -556,6 +559,41 @@ void emit_batch_item_result(
         suffixed_json_path(policy.turns_base, request_id),
         suffixed_json_path(policy.words_base, request_id),
         policy.wav_options);
+}
+
+void emit_batch_item_timing(const AppRequestTiming & timing) {
+    const auto finite = [](const std::optional<double> & value) {
+        return value.has_value() && std::isfinite(*value) && *value >= 0.0;
+    };
+    const bool valid = timing.prepare_completed && timing.run_completed && timing.callback_completed &&
+        timing.wav_written.value_or(false) && std::isfinite(timing.prepare_ms) &&
+        timing.prepare_ms >= 0.0 && finite(timing.run_ms) &&
+        finite(timing.callback_ms) && finite(timing.full_ms);
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    out << std::setprecision(17);
+    auto number = [&](const std::optional<double> & value) {
+        if (finite(value)) out << *value; else out << "null";
+    };
+    out << "{\"event\":\"batch_request_timing\",\"id\":" << quote_json(timing.id)
+        << ",\"index\":" << timing.index
+        << ",\"prepare_ms\":";
+    number(timing.prepare_ms);
+    out << ",\"run_ms\":"; number(timing.run_ms);
+    out << ",\"callback_ms\":"; number(timing.callback_ms);
+    out << ",\"full_ms\":"; number(timing.full_ms);
+    out << ",\"prepare_completed\":" << (timing.prepare_completed ? "true" : "false")
+        << ",\"run_completed\":" << (timing.run_completed ? "true" : "false")
+        << ",\"callback_attempted\":" << (timing.callback_attempted ? "true" : "false")
+        << ",\"callback_completed\":" << (timing.callback_completed ? "true" : "false")
+        << ",\"wav_written\":";
+    if (timing.wav_written.has_value()) out << (*timing.wav_written ? "true" : "false");
+    else out << "null";
+    out << ",\"valid\":" << (valid ? "true" : "false") << "}";
+    // Failures go to stderr, where the original exception is also reported.
+    auto & stream = timing.callback_completed ? std::cout : std::cerr;
+    stream << "[BATCH_TIMING] " << out.str() << std::endl;
+    if (!stream) throw std::runtime_error("failed to write batch timing event");
 }
 
 }  // namespace minitts::app

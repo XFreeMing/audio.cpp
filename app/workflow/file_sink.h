@@ -48,6 +48,8 @@ void emit_batch_item_result(
     size_t index,
     const AppRequestResult & item,
     const FileOutputPolicy & policy);
+// A separate JSON line; existing stdout and batch-manifest fields remain intact.
+void emit_batch_item_timing(const AppRequestTiming & timing);
 void emit_batch_summary(
     const AppBatchResult & batch,
     const FileOutputPolicy & policy);
