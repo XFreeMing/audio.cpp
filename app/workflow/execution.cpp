@@ -62,17 +62,7 @@ AppBatchResult run_offline_batch(
     const auto session_start = Clock::now();
 
     const auto prepare_start = Clock::now();
-    try {
-        session.prepare(engine::runtime::build_preparation_request(batch.requests.front().request));
-    } catch (...) {
-        if (on_timing) {
-            AppRequestTiming timing;
-            timing.id = batch.requests.front().id;
-            timing.prepare_ms = to_ms(Clock::now() - prepare_start);
-            try { on_timing(timing); } catch (...) { /* preserve the preparation error */ }
-        }
-        throw;
-    }
+    session.prepare(engine::runtime::build_preparation_request(batch.requests.front().request));
     AppBatchResult out;
     out.prepare_ms = to_ms(Clock::now() - prepare_start);
     out.results.reserve(batch.requests.size());
@@ -84,14 +74,7 @@ AppBatchResult run_offline_batch(
         timing.prepare_completed = true;
         const auto run_start = Clock::now();
         engine::runtime::TaskResult result;
-        try {
-            result = offline.run(item.request);
-        } catch (...) {
-            if (on_timing) {
-                try { on_timing(timing); } catch (...) { /* preserve the execution error */ }
-            }
-            throw;
-        }
+        result = offline.run(item.request);
         const double wall_ms = to_ms(Clock::now() - run_start);
         timing.run_ms = wall_ms;
         timing.run_completed = true;
@@ -103,17 +86,8 @@ AppBatchResult run_offline_batch(
         if (on_result) {
             timing.callback_attempted = true;
             const auto callback_start = Clock::now();
-            try {
-                timing.wav_written = on_result(out.results.size() - 1, out.results.back());
-                timing.callback_completed = true;
-            } catch (...) {
-                timing.callback_ms = to_ms(Clock::now() - callback_start);
-                timing.full_ms = to_ms(Clock::now() - run_start);
-                if (on_timing) {
-                    try { on_timing(timing); } catch (...) { /* preserve the output error */ }
-                }
-                throw;
-            }
+            timing.wav_written = on_result(out.results.size() - 1, out.results.back());
+            timing.callback_completed = true;
             timing.callback_ms = to_ms(Clock::now() - callback_start);
             timing.full_ms = to_ms(Clock::now() - run_start);
         }
