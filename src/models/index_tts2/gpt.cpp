@@ -1999,9 +1999,12 @@ public:
         ggml_backend_tensor_set(attention_mask_, attention_mask_values_.data(), 0, attention_mask_values_.size() * sizeof(ggml_fp16_t));
 
         auto & graph = bank_graphs_[static_cast<size_t>(child_bank)];
+        const auto allocation_start = Clock::now();
         if (!ggml_gallocr_alloc_graph(gallocr_, graph.graph)) {
             throw std::runtime_error("failed to allocate IndexTTS2 GPT decode bank graph");
         }
+        allocation_ms_ += engine::debug::elapsed_ms(allocation_start, Clock::now());
+        ++allocation_calls_;
         core::set_backend_threads(execution_.backend(), execution_.config().threads);
         const ggml_status status = core::compute_backend_graph(execution_.backend(), graph.graph);
         ggml_backend_synchronize(execution_.backend());
@@ -2023,7 +2026,16 @@ public:
         return out;
     }
 
+    void log_allocation_timing() {
+        debug::timing_log_scalar("index_tts2.gpt.decode.alloc_ms", allocation_ms_);
+        debug::trace_log_scalar("index_tts2.gpt.decode.alloc_calls", allocation_calls_);
+        allocation_ms_ = 0.0;
+        allocation_calls_ = 0;
+    }
+
 private:
+    double allocation_ms_ = 0.0;
+    int64_t allocation_calls_ = 0;
     struct BankGraph {
         ggml_cgraph * graph = nullptr;
         ggml_tensor * logits = nullptr;
@@ -2608,6 +2620,7 @@ IndexTTS2GptGeneration IndexTTS2GptRuntime::generate_speech(const IndexTTS2GptGe
     }
     debug::timing_log_scalar("index_tts2.gpt.sampling_ms", sampling_ms);
     debug::timing_log_scalar("index_tts2.gpt.decode.run_ms", decode_run_ms);
+    decode_graph_->log_allocation_timing();
     if (!beam_search_done) {
         for (auto & beam : beams) {
             add_completed(std::move(beam));
