@@ -79,6 +79,7 @@ void print_task_list_help() {
         << "  Batch:\n"
         << "    --request-sequence <json>  Run JSON requests in one offline session\n"
         << "    --batch-text-file <txt>  Run one offline request per non-empty line\n"
+        << "    --batch-request-timing  Include per-request input read, prepare, run and WAV write\n"
         << "    --batch-text-dir <dir>  Run one offline request per .txt, .md, or .json file\n"
         << "    --batch-audio-dir <dir>  Run one offline request per .wav file\n"
         << "    --batch-audio-role audio|voice_ref|source_audio|target_voice|prosody_ref|style_ref\n"
@@ -669,6 +670,7 @@ int audiocpp_cli_main(int argc, char ** argv) {
             engine::core::set_load_progress_enabled(*load_progress == "1");
         }
         const bool metrics_requested = has_arg(argc, argv, "--metrics");
+        const bool batch_request_timing = has_arg(argc, argv, "--batch-request-timing");
         if (has_arg(argc, argv, "--version")) {
             minitts::app::print_build_info(std::cout);
             return 0;
@@ -925,11 +927,16 @@ int audiocpp_cli_main(int argc, char ** argv) {
         session_options.options = collect_key_value_args(argc, argv, "--session-option");
         // Parsed before the model loads so a bad value fails fast.
         const auto wav_options = wav_write_options_from_cli(argc, argv);
+        const auto model_load_start = std::chrono::steady_clock::now();
         auto model = registry.load(load_request);
         auto session = model->create_task_session(task_spec, session_options);
         // The weight stores uploaded during session construction: close the
         // load-progress bracket opened by registry.load (see finish_model_load_trace).
         engine::runtime::finish_model_load_trace();
+        if (batch_request_timing) {
+            std::cout << "[SPEECH_LOAD] model_load_ms=" << std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - model_load_start).count() << std::endl;
+        }
         const auto voice_state_out = optional_path_arg(argc, argv, "--voice-state-out");
         const auto text_out = optional_path_arg(argc, argv, "--text-out");
         const auto words_out = optional_path_arg(argc, argv, "--words-out");
@@ -965,7 +972,7 @@ int audiocpp_cli_main(int argc, char ** argv) {
                 throw std::runtime_error("selected task session does not support offline execution");
             }
             engine::runtime::TaskRequest base_request =
-                optional_path_arg(argc, argv, "--request-sequence").has_value()
+                (batch_request_timing || optional_path_arg(argc, argv, "--request-sequence").has_value())
                     ? engine::runtime::TaskRequest{}
                     : build_request_from_cli(argc, argv);
             if (words_out.has_value()) {
@@ -981,6 +988,42 @@ int audiocpp_cli_main(int argc, char ** argv) {
             std::cout << "family=" << session->family() << "\n";
             std::cout << "task=" << engine::runtime::to_string(session->task_kind()) << "\n";
             std::cout << "mode=" << engine::runtime::to_string(session->run_mode()) << "\n";
+            if (batch_request_timing) {
+                if (!optional_path_arg(argc, argv, "--batch-text-file").has_value() ||
+                    !outputs.output_dir.has_value() || merge_mode != minitts::app::AudioMergeMode::None) {
+                    throw std::runtime_error("--batch-request-timing requires --batch-text-file, --out-dir and no merge");
+                }
+                // Each request starts before reference file read and prepare. No synthetic
+                // warmup: prepare and the first inference both fall inside request 0.
+                for (size_t i = 0; i < batch_request.requests.size(); ++i) {
+                    using Clock = std::chrono::steady_clock;
+                    const auto started = Clock::now();
+                    const auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+                    auto request = build_request_from_cli(argc, argv);
+                    request.text_input = batch_request.requests[i].request.text_input;
+                    const double input_ms = ms(Clock::now() - started);
+                    minitts::app::AppBatchRequest one;
+                    one.requests.push_back({batch_request.requests[i].id, std::move(request)});
+                    minitts::app::run_offline_batch(*session, *offline, one, merge_mode,
+                        [&](size_t, const minitts::app::AppRequestResult & item) {
+                            minitts::app::emit_batch_item_result(i, item, outputs);
+                            return true;
+                        },
+                        [&](const minitts::app::AppRequestTiming & timing) {
+                            if (!timing.callback_completed || timing.wav_written != true) {
+                                throw std::runtime_error("request WAV callback did not complete");
+                            }
+                            const double request_ms = ms(Clock::now() - started);
+                            std::cout << "[SPEECH_TIMING] {\"index\":" << i
+                                << ",\"input_ms\":" << input_ms
+                                << ",\"prepare_ms\":" << timing.prepare_ms
+                                << ",\"run_ms\":" << timing.run_ms.value()
+                                << ",\"write_ms\":" << timing.callback_ms.value()
+                                << ",\"request_ms\":" << request_ms << "}" << std::endl;
+                        });
+                }
+                return 0;
+            }
             const auto batch_result = minitts::app::run_offline_batch(
                 *session,
                 *offline,
