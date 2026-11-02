@@ -1999,12 +1999,20 @@ public:
         ggml_backend_tensor_set(attention_mask_, attention_mask_values_.data(), 0, attention_mask_values_.size() * sizeof(ggml_fp16_t));
 
         auto & graph = bank_graphs_[static_cast<size_t>(child_bank)];
-        const auto allocation_start = Clock::now();
-        if (!ggml_gallocr_alloc_graph(gallocr_, graph.graph)) {
-            throw std::runtime_error("failed to allocate IndexTTS2 GPT decode bank graph");
+        // This allocator belongs to DecodeGraph and the graph shapes are fixed.
+        // Constructor bound bank 0; only a bank switch can invalidate the current
+        // bindings. Rebinding the same graph walks every node on every token.
+        if (allocated_bank_ != child_bank) {
+            const auto allocation_start = Clock::now();
+            if (!ggml_gallocr_alloc_graph(gallocr_, graph.graph)) {
+                throw std::runtime_error("failed to allocate IndexTTS2 GPT decode bank graph");
+            }
+            allocated_bank_ = child_bank;
+            allocation_ms_ += engine::debug::elapsed_ms(allocation_start, Clock::now());
+            ++allocation_calls_;
+        } else {
+            ++allocation_skipped_;
         }
-        allocation_ms_ += engine::debug::elapsed_ms(allocation_start, Clock::now());
-        ++allocation_calls_;
         core::set_backend_threads(execution_.backend(), execution_.config().threads);
         const ggml_status status = core::compute_backend_graph(execution_.backend(), graph.graph);
         ggml_backend_synchronize(execution_.backend());
@@ -2029,11 +2037,15 @@ public:
     void log_allocation_timing() {
         debug::timing_log_scalar("index_tts2.gpt.decode.alloc_ms", allocation_ms_);
         debug::trace_log_scalar("index_tts2.gpt.decode.alloc_calls", allocation_calls_);
+        debug::trace_log_scalar("index_tts2.gpt.decode.alloc_skipped", allocation_skipped_);
+        allocation_skipped_ = 0;
         allocation_ms_ = 0.0;
         allocation_calls_ = 0;
     }
 
 private:
+    int64_t allocated_bank_ = 0;
+    int64_t allocation_skipped_ = 0;
     double allocation_ms_ = 0.0;
     int64_t allocation_calls_ = 0;
     struct BankGraph {
