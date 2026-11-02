@@ -984,7 +984,7 @@ int audiocpp_cli_main(int argc, char ** argv) {
                     item.request.options["return_timestamps"] = "true";
                 }
             }
-            require_known_args(argc, argv);
+            if (!batch_request_timing) require_known_args(argc, argv);
             std::cout << "family=" << session->family() << "\n";
             std::cout << "task=" << engine::runtime::to_string(session->task_kind()) << "\n";
             std::cout << "mode=" << engine::runtime::to_string(session->run_mode()) << "\n";
@@ -1000,6 +1000,7 @@ int audiocpp_cli_main(int argc, char ** argv) {
                     const auto started = Clock::now();
                     const auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
                     auto request = build_request_from_cli(argc, argv);
+                    require_known_args(argc, argv);
                     request.text_input = batch_request.requests[i].request.text_input;
                     const double input_ms = ms(Clock::now() - started);
                     minitts::app::AppBatchRequest one;
@@ -1007,6 +1008,10 @@ int audiocpp_cli_main(int argc, char ** argv) {
                     minitts::app::run_offline_batch(*session, *offline, one, merge_mode,
                         [&](size_t, const minitts::app::AppRequestResult & item) {
                             minitts::app::emit_batch_item_result(i, item, outputs);
+                            const auto path = *outputs.output_dir / (minitts::app::safe_output_name(item.id) + ".wav");
+                            if (!std::filesystem::is_regular_file(path) || std::filesystem::file_size(path) <= 44) {
+                                throw std::runtime_error("request did not write a nonempty WAV");
+                            }
                             return true;
                         },
                         [&](const minitts::app::AppRequestTiming & timing) {
