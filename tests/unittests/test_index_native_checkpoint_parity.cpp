@@ -1,4 +1,5 @@
 #include "engine/framework/assets/tensor_source.h"
+#include "engine/framework/modules/speaker_encoders/campplus_encoder.h"
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -8,7 +9,7 @@
 // Explicit, CPU-only comparison of official checkpoint tensors with an existing
 // lossless safetensors preparation. No model sessions or GPU backend are created.
 int main(int argc, char ** argv) {
-    if (argc != 3) return 2;
+    if (argc != 3 && argc != 4) return 2;
     try {
         const std::filesystem::path original(argv[1]), prepared(argv[2]);
         struct Pair { const char * raw; const char * safe; const char * raw_prefix; const char * safe_prefix; };
@@ -22,6 +23,7 @@ int main(int argc, char ** argv) {
             {"auxiliary/bigvgan/bigvgan_generator.pt", "bigvgan/model.safetensors", "generator", ""},
         };
         for (const auto & pair : files) {
+            if (argc == 4) continue;
             const auto raw = engine::assets::open_tensor_source(original / pair.raw, pair.raw_prefix);
             const auto safe = engine::assets::open_tensor_source(prepared / pair.safe, pair.safe_prefix);
             const auto tensors = safe->tensors();
@@ -33,6 +35,16 @@ int main(int argc, char ** argv) {
                 }
             }
             std::cout << pair.raw << ": " << tensors.size() << " tensors byte-identical\n";
+        }
+        for (bool raw : {true, false}) {
+            engine::modules::CampplusEncoderConfig config;
+            config.tensor_prefix = raw ? "" : "speaker_encoder";
+            config.weight_storage_type = engine::assets::TensorStorageType::F32;
+            const auto source = engine::assets::open_tensor_source(raw
+                ? original / "auxiliary/campplus/campplus_cn_common.bin" : prepared / "campplus.safetensors");
+            const auto component = engine::modules::CampplusEncoderComponent::load_from_tensor_source(
+                source, engine::core::BackendConfig{}, config);
+            std::cout << (raw ? "official" : "prepared") << " CAMPPlus all weights loaded on CPU\n";
         }
     } catch (const std::exception & error) {
         std::cerr << error.what() << '\n';

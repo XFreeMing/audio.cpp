@@ -279,9 +279,6 @@ void validate_config(const CampplusEncoderConfig & config) {
     if (config.embedding_size <= 0) {
         throw std::runtime_error("CAMPPlus framework module requires positive embedding size");
     }
-    if (config.tensor_prefix.empty()) {
-        throw std::runtime_error("CAMPPlus framework module requires non-empty tensor prefix");
-    }
     if (config.stats_variance_floor < 0.0F) {
         throw std::runtime_error("CAMPPlus framework module requires non-negative stats variance floor");
     }
@@ -685,7 +682,7 @@ std::shared_ptr<const CampplusEncoderWeights> load_typed_weights(
 
     const std::string base = weights->config.tensor_prefix;
     auto tensor_name = [&](const std::string & suffix) {
-        return base + "." + suffix;
+        return base.empty() ? suffix : base + "." + suffix;
     };
     const bool fused = weights->config.weight_layout == CampplusEncoderWeightLayout::Fused;
     auto has_bias = [&](const std::string & prefix) {
