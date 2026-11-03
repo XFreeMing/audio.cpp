@@ -1231,12 +1231,15 @@ public:
         while (!prefix_.empty() && prefix_.back() == '/') prefix_.pop_back();
         if (prefix_.empty()) throw std::runtime_error("packed tensor source prefix is empty");
         const std::string marker = prefix_ + "/";
+        const std::string dotted_marker = prefix_ + ".";
         for (const auto & tensor : source_->tensors()) {
-            if (tensor.name.rfind(marker, 0) == 0) {
-                routes_.emplace(tensor.name.substr(marker.size()), tensor.name);
+            if (tensor.name.rfind(marker, 0) == 0 || tensor.name.rfind(dotted_marker, 0) == 0) {
+                if (!routes_.emplace(tensor.name.substr(marker.size()), tensor.name).second) {
+                    throw std::runtime_error("ambiguous tensor namespace: " + prefix_);
+                }
             }
         }
-        if (routes_.empty()) throw std::runtime_error("packed GGUF namespace does not exist: " + prefix_);
+        if (routes_.empty()) throw std::runtime_error("tensor namespace does not exist: " + prefix_);
     }
 
     const std::filesystem::path & source_path() const noexcept override { return source_->source_path(); }

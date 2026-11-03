@@ -17,6 +17,10 @@ IndexTTS2CampplusStyleEncoder::IndexTTS2CampplusStyleEncoder(
     config.feat_dim = assets_->config.s2mel.n_mels;
     config.embedding_size = assets_->config.s2mel.style_dim;
     config.weight_storage_type = weight_storage_type;
+    if (!assets_->campplus_weights->has_tensor("speaker_encoder.head.conv1.weight") &&
+        assets_->campplus_weights->has_tensor("head.conv1.weight")) {
+        config.tensor_prefix.clear();  // Official checkpoint keeps the unprefixed CAMPPlus keys.
+    }
     component_ = engine::modules::CampplusEncoderComponent::load_from_tensor_source(
         assets_->campplus_weights,
         std::move(backend),

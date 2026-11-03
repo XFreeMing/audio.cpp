@@ -302,6 +302,32 @@ void test_unsupported_views_are_rejected() {
     expect_rejected({{"tail", 6, {4}, {1}}}, 8, "a view past the end of its storage");
 }
 
+void test_nested_checkpoint_and_training_metadata() {
+    std::vector<uint8_t> pickle = {0x80, 0x02, '}'};
+    put_binunicode(pickle, "net");
+    pickle.push_back('}');
+    put_tensor_entry(pickle, "weight", 0, {2}, {1}, 2);
+    pickle.push_back('s');
+    pickle.push_back('s');
+    put_binunicode(pickle, "optimizer");
+    pickle.push_back(']');
+    pickle.push_back('G');  // float metadata
+    for (int i = 0; i < 8; ++i) pickle.push_back(0);
+    pickle.push_back('a');
+    pickle.push_back('s');
+    pickle.push_back('.');
+    std::vector<uint8_t> data(sizeof(float) * 2);
+    const float values[] = {3.0f, 7.0f};
+    std::memcpy(data.data(), values, sizeof(values));
+    const auto archive = stored_zip({{"archive/data.pkl", pickle}, {"archive/data/0", data}});
+    const auto path = std::filesystem::temp_directory_path() / "torch_nested_checkpoint.pth";
+    { std::ofstream out(path, std::ios::binary); out.write(reinterpret_cast<const char *>(archive.data()), archive.size()); }
+    const auto source = engine::assets::open_tensor_source(path, "net");
+    require(source->require_f32("weight") == std::vector<float>({3.0f, 7.0f}), "nested tensor must preserve values");
+    require(source->tensors().size() == 1, "optimizer metadata is not a tensor");
+    std::filesystem::remove(path);
+}
+
 }  // namespace
 
 int main() {
@@ -312,6 +338,7 @@ int main() {
         test_chunked_matrix_honours_storage_offset();
         test_size_one_dims_ignore_stride();
         test_unsupported_views_are_rejected();
+        test_nested_checkpoint_and_training_metadata();
     } catch (const std::exception & error) {
         std::cerr << "torch .bin storage offset test failed: " << error.what() << "\n";
         return 1;

@@ -117,7 +117,7 @@ std::map<std::string, ZipEntry> read_zip_entries(const std::vector<uint8_t> & by
 
 // ---- Restricted pickle interpreter --------------------------------------------------
 
-enum class GlobalKind { None, OrderedDict, RebuildTensor, StorageF32, StorageF16, StorageBF16 };
+enum class GlobalKind { None, OrderedDict, RebuildTensor, StorageF32, StorageF16, StorageBF16, StorageI64 };
 
 struct PickleValue {
     enum class Kind { None, Int, Bool, Str, Tuple, Global, Storage, Tensor, Dict } kind = Kind::None;
@@ -141,6 +141,9 @@ GlobalKind classify_global(const std::string & module, const std::string & name)
     }
     if (module == "torch" && name == "FloatStorage") {
         return GlobalKind::StorageF32;
+    }
+    if (module == "torch" && name == "LongStorage") {
+        return GlobalKind::StorageI64;
     }
     if (module == "torch" && name == "HalfStorage") {
         return GlobalKind::StorageF16;
@@ -177,6 +180,10 @@ public:
                 case 0x93: op_stack_global(); break;                            // STACK_GLOBAL
                 case ')': push(tuple_value({})); break;                         // EMPTY_TUPLE
                 case '}': push(dict_value()); break;                            // EMPTY_DICT
+                case ']': push(tuple_value({})); break;                         // EMPTY_LIST (metadata)
+                case 'G': expect(8); cursor_ += 8; push(none_value()); break;    // BINFLOAT (metadata)
+                case 'a': op_append(); break;                                  // APPEND
+                case 'e': op_appends(); break;                                 // APPENDS
                 case 0x85: op_tuple(1); break;                                  // TUPLE1
                 case 0x86: op_tuple(2); break;                                  // TUPLE2
                 case 0x87: op_tuple(3); break;                                  // TUPLE3
@@ -414,6 +421,36 @@ private:
             stack_.back().items.push_back(std::move(item));
         }
     }
+    void op_append() {
+        auto value = pop();
+        if (stack_.empty() || stack_.back().kind != PickleValue::Kind::Tuple) {
+            throw std::runtime_error("torch checkpoint APPEND without a list");
+        }
+        stack_.back().items.push_back(std::move(value));
+    }
+    void op_appends() {
+        const size_t mark = pop_mark();
+        std::vector<PickleValue> values(stack_.begin() + static_cast<std::ptrdiff_t>(mark), stack_.end());
+        stack_.erase(stack_.begin() + static_cast<std::ptrdiff_t>(mark), stack_.end());
+        if (stack_.empty() || stack_.back().kind != PickleValue::Kind::Tuple) {
+            throw std::runtime_error("torch checkpoint APPENDS without a list");
+        }
+        for (auto & value : values) stack_.back().items.push_back(std::move(value));
+    }
+    static void flatten(const PickleValue & value, const std::string & prefix, std::vector<PickleValue> & out) {
+        if (value.kind == PickleValue::Kind::Tensor) {
+            out.push_back(str_value(prefix.empty() ? "tensor" : prefix));
+            out.push_back(value);
+        } else if (value.kind == PickleValue::Kind::Dict) {
+            for (size_t i = 0; i + 1 < value.items.size(); i += 2) {
+                const auto & key = value.items[i];
+                if (key.kind != PickleValue::Kind::Str && key.kind != PickleValue::Kind::Int) continue;
+                const auto name = key.kind == PickleValue::Kind::Str ? key.text : std::to_string(key.integer);
+                flatten(value.items[i + 1], prefix.empty() ? name : prefix + "." + name, out);
+            }
+        }
+        // Optimizer/training scalars and lists are metadata, never executable objects.
+    }
     std::vector<PickleValue> finish() {
         const PickleValue result = pop();
         if (result.kind == PickleValue::Kind::Tensor) {
@@ -422,7 +459,10 @@ private:
         if (result.kind != PickleValue::Kind::Dict) {
             throw std::runtime_error("torch .bin pickle did not produce a state dict");
         }
-        return result.items;
+        std::vector<PickleValue> tensors;
+        flatten(result, "", tensors);
+        if (tensors.empty()) throw std::runtime_error("torch checkpoint contains no tensors");
+        return tensors;
     }
 
     const uint8_t * data_;
@@ -447,12 +487,14 @@ const char * storage_dtype_name(GlobalKind kind) {
         case GlobalKind::StorageF32: return "F32";
         case GlobalKind::StorageF16: return "F16";
         case GlobalKind::StorageBF16: return "BF16";
+        case GlobalKind::StorageI64: return "I64";
         default:
             throw std::runtime_error("torch .bin tensor has an unsupported storage dtype");
     }
 }
 
 size_t dtype_byte_size(const std::string & dtype) {
+    if (dtype == "I64") return 8;
     if (dtype == "F32") {
         return 4;
     }
@@ -463,6 +505,12 @@ std::vector<float> decode_f32(const std::string & dtype, const uint8_t * data, s
     std::vector<float> values(elements);
     if (dtype == "F32") {
         std::memcpy(values.data(), data, elements * sizeof(float));
+    } else if (dtype == "I64") {
+        for (size_t i = 0; i < elements; ++i) {
+            int64_t value;
+            std::memcpy(&value, data + i * sizeof(value), sizeof(value));
+            values[i] = static_cast<float>(value);
+        }
     } else if (dtype == "F16") {
         ggml_fp16_to_fp32_row(
             reinterpret_cast<const ggml_fp16_t *>(data), values.data(), static_cast<int64_t>(elements));
@@ -606,7 +654,13 @@ public:
     }
 
     int64_t require_i64_scalar(std::string_view name) const override {
-        throw std::runtime_error("torch .bin does not support i64 scalars: " + std::string(name));
+        const auto & record = require_record(name);
+        if (record.dtype != "I64" || shape_elements(record.shape) != 1) {
+            throw std::runtime_error("torch checkpoint tensor is not an i64 scalar: " + std::string(name));
+        }
+        int64_t value;
+        std::memcpy(&value, bytes_.data() + record.byte_offset, sizeof(value));
+        return value;
     }
 
 private:

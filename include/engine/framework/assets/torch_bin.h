@@ -9,7 +9,8 @@ namespace engine::assets {
 
 // Opens a PyTorch `.bin` checkpoint (a ZIP archive wrapping a pickled state dict) as a
 // tensor source. Only the restricted subset produced by torch.save of a flat
-// OrderedDict[str, Tensor] or a single root tensor (exposed as "tensor") is supported.
+// OrderedDict/dict (nested tensor names are joined with dots) or a single root
+// tensor (exposed as "tensor") is supported. Training scalars/lists are ignored.
 // The pickle is walked with a whitelist of
 // globals so no adapter code is ever executed. Tensor storages must be uncompressed.
 // Tensors that are views into a shared storage are read from their storage offset;

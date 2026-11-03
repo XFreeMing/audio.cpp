@@ -411,6 +411,36 @@
         "IndexTTS2.5-GGUF/index-tts2_5-orig.gguf"
       ],
       "strip_prefix": "IndexTTS2.5-GGUF"
+    },
+    {
+      "id": "index_tts2_pytorch",
+      "display_name": "IndexTTS2 official download layout",
+      "format": "pytorch",
+      "precision": "native",
+      "target_directory": "IndexTTS-2",
+      "files": [
+        "auxiliary/MaskGCT/semantic_codec/model.safetensors",
+        "auxiliary/bigvgan/bigvgan_generator.pt",
+        "auxiliary/bigvgan/config.json",
+        "auxiliary/campplus/campplus_cn_common.bin",
+        "auxiliary/w2v-bert-2.0/config.json",
+        "auxiliary/w2v-bert-2.0/model.safetensors",
+        "auxiliary/w2v-bert-2.0/preprocessor_config.json",
+        "bpe.model",
+        "config.yaml",
+        "feat1.pt",
+        "feat2.pt",
+        "gpt.pth",
+        "qwen0.6bemo4-merge/config.json",
+        "qwen0.6bemo4-merge/generation_config.json",
+        "qwen0.6bemo4-merge/merges.txt",
+        "qwen0.6bemo4-merge/model.safetensors",
+        "qwen0.6bemo4-merge/tokenizer.json",
+        "qwen0.6bemo4-merge/tokenizer_config.json",
+        "qwen0.6bemo4-merge/vocab.json",
+        "s2mel.pth",
+        "wav2vec2bert_stats.pt"
+      ]
     }
   ],
   "sources": [
@@ -510,6 +540,46 @@
         "semantic_codec": "model:semantic_codec_model.safetensors",
         "campplus": "model:campplus.safetensors",
         "bigvgan": "model:bigvgan/model.safetensors",
+        "qwen_emotion": "model:qwen0.6bemo4-merge/model.safetensors"
+      }
+    },
+    {
+      "format": "pytorch",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.yaml",
+        "wav2vec2bert_config": "model:auxiliary/w2v-bert-2.0/config.json",
+        "wav2vec2bert_preprocessor_config": "model:auxiliary/w2v-bert-2.0/preprocessor_config.json",
+        "bigvgan_config": "model:auxiliary/bigvgan/config.json",
+        "qwen_emotion_config": "model:qwen0.6bemo4-merge/config.json",
+        "qwen_emotion_generation_config": "model:qwen0.6bemo4-merge/generation_config.json",
+        "qwen_emotion_tokenizer": "model:qwen0.6bemo4-merge/tokenizer.json",
+        "qwen_emotion_tokenizer_config": "model:qwen0.6bemo4-merge/tokenizer_config.json",
+        "qwen_emotion_vocab": "model:qwen0.6bemo4-merge/vocab.json",
+        "qwen_emotion_merges": "model:qwen0.6bemo4-merge/merges.txt"
+      },
+      "optional_files": {
+        "bpe": "model:bpe.model",
+        "tiktoken": "model:multilingual_zh_ja_yue_char_del.tiktoken"
+      },
+      "tensors": {
+        "gpt": "model:gpt.pth",
+        "s2mel": {
+          "source": "model:s2mel.pth",
+          "prefix": "net"
+        },
+        "speaker_matrix": "model:feat1.pt",
+        "emotion_matrix": "model:feat2.pt",
+        "wav2vec2bert_stats": "model:wav2vec2bert_stats.pt",
+        "wav2vec2bert": "model:auxiliary/w2v-bert-2.0/model.safetensors",
+        "semantic_codec": "model:auxiliary/MaskGCT/semantic_codec/model.safetensors",
+        "campplus": "model:auxiliary/campplus/campplus_cn_common.bin",
+        "bigvgan": {
+          "source": "model:auxiliary/bigvgan/bigvgan_generator.pt",
+          "prefix": "generator"
+        },
         "qwen_emotion": "model:qwen0.6bemo4-merge/model.safetensors"
       }
     }

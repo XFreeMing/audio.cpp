@@ -396,7 +396,7 @@ SelectedSource select_source(const std::filesystem::path & model_path, const std
         auto roots = resolve_source_roots(prepared.model_root, source, prepared.standalone_gguf);
         return SelectedSource{prepared.model_root, source, std::move(roots), spec_description, format};
     }
-    if (format == "safetensors") {
+    if (format == "safetensors" || format == "pytorch") {
         auto roots = resolve_source_roots(model_root, source, std::nullopt);
         return SelectedSource{model_root, source, std::move(roots), spec_description, format};
     }
@@ -423,9 +423,33 @@ SelectedSource require_selected_source(const std::filesystem::path & model_path,
             throw std::runtime_error(ambiguous_directory_gguf_message(model_path, files));
         }
     }
+    // Multiple local layouts may describe the same model. Select by required
+    // files before opening tensors; corrupt files in a complete layout still
+    // fail in that layout and never trigger a runtime/backend fallback.
+    const engine::io::json::Value * partial_source = nullptr;
     for (const auto & source : sources) {
         const auto format = require_source_format(source);
-        if ((use_gguf && format == "gguf") || (!use_gguf && format == "safetensors")) {
+        if (!use_gguf && (format == "safetensors" || format == "pytorch")) {
+            const auto roots = resolve_source_roots(model_root, source, std::nullopt);
+            bool complete = true;
+            bool any_tensor = false;
+            for (const auto & map_name : {"files", "tensors"}) {
+                const auto * map = source.find(map_name);
+                if (map == nullptr) continue;
+                for (const auto & [id, ref] : map->as_object()) {
+                    std::string prefix;
+                    const auto path = std::string(map_name) == "tensors"
+                        ? resolve_tensor_source_ref(roots, ref, prefix) : resolve_resource_ref(roots, ref.as_string());
+                    const bool present = engine::io::is_existing_file(path);
+                    complete = complete && present;
+                    if (std::string(map_name) == "tensors") any_tensor = any_tensor || present;
+                }
+            }
+            if (any_tensor && partial_source == nullptr) partial_source = &source;
+            if (complete) return select_source(model_path, model_root, spec_description, source);
+            continue;
+        }
+        if (use_gguf && format == "gguf") {
             try {
                 return select_source(model_path, model_root, spec_description, source);
             } catch (const std::exception & error) {
@@ -433,6 +457,9 @@ SelectedSource require_selected_source(const std::filesystem::path & model_path,
                                          " source from " + spec_description + ": " + error.what());
             }
         }
+    }
+    if (!use_gguf && partial_source != nullptr) {
+        return select_source(model_path, model_root, spec_description, *partial_source);
     }
     throw std::runtime_error(std::string("no ") + (use_gguf ? "gguf" : "safetensors") + " model source in " +
                              spec_description);
